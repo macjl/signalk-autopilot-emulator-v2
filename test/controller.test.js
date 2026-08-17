@@ -4,7 +4,13 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const {
-  _internals: { createController, calculateOutput, degToRad, DEFAULTS }
+  _internals: {
+    createController,
+    calculateOutput,
+    degToRad,
+    DEFAULTS,
+    readCurrentAngle
+  }
 } = require('../index')
 
 test('starts in standby with clean v2 options', async () => {
@@ -17,7 +23,7 @@ test('starts in standby with clean v2 options', async () => {
         { name: 'standby', engaged: false },
         { name: 'auto', engaged: true }
       ],
-      modes: ['compass', 'route', 'windApparent', 'windTrue'],
+      modes: ['compass', 'gps', 'windApparent', 'windTrue'],
       actions: [
         { id: 'dodge', name: 'Dodge', available: false },
         { id: 'tack', name: 'Tack', available: false },
@@ -25,7 +31,7 @@ test('starts in standby with clean v2 options', async () => {
         {
           id: 'courseCurrentPoint',
           name: 'Steer to current course point',
-          available: true
+          available: false
         },
         {
           id: 'courseNextPoint',
@@ -43,7 +49,7 @@ test('starts in standby with clean v2 options', async () => {
 
 test('engage initializes compass target from current heading', async () => {
   const app = fakeApp({
-    'navigation.headingMagnetic.value': degToRad(123)
+    'navigation.headingTrue.value': degToRad(123)
   })
   const controller = createController(app, DEFAULTS)
 
@@ -58,7 +64,7 @@ test('engage initializes compass target from current heading', async () => {
 
 test('heading controller commands starboard turn for positive heading error', () => {
   const app = fakeApp({
-    'navigation.headingMagnetic.value': degToRad(10)
+    'navigation.headingTrue.value': degToRad(10)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: true,
@@ -70,9 +76,60 @@ test('heading controller commands starboard turn for positive heading error', ()
   assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
 })
 
+test('heading controller does not fall back to GPS course in compass mode', () => {
+  const app = fakeApp({
+    'navigation.courseOverGroundTrue.value': degToRad(10)
+  })
+  const output = calculateOutput(app, DEFAULTS, {
+    engaged: true,
+    mode: 'compass',
+    target: degToRad(20)
+  })
+
+  assert.deepEqual(output, { turnRate: 0, error: null })
+})
+
+test('gps mode uses configured course input', () => {
+  const app = fakeApp({
+    'navigation.courseOverGroundTrue.value': degToRad(10)
+  })
+  const output = calculateOutput(app, DEFAULTS, {
+    engaged: true,
+    mode: 'gps',
+    target: degToRad(20)
+  })
+
+  assertNear(output.error, degToRad(10))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+})
+
+test('route following actions are explicit non-implementations', async () => {
+  const app = fakeApp()
+  const controller = createController(app, DEFAULTS)
+
+  await assert.rejects(
+    () => controller.provider.courseCurrentPoint('virtual'),
+    /Route following is not implemented/
+  )
+  await assert.rejects(
+    () => controller.provider.courseNextPoint('virtual'),
+    /Route following is not implemented/
+  )
+})
+
+test('input reader accepts a Signal K path object as well as a value path', () => {
+  const app = fakeApp({
+    'navigation.headingTrue.value': {
+      value: degToRad(42)
+    }
+  })
+
+  assertNear(readCurrentAngle(app, DEFAULTS, 'compass'), degToRad(42))
+})
+
 test('heading controller saturates turn-rate output', () => {
   const app = fakeApp({
-    'navigation.headingMagnetic.value': degToRad(0)
+    'navigation.headingTrue.value': degToRad(0)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: true,
@@ -99,7 +156,7 @@ test('wind controller uses opposite sign because wind angle is relative to bow',
 
 test('standby publishes zero output', () => {
   const app = fakeApp({
-    'navigation.headingMagnetic.value': degToRad(0)
+    'navigation.headingTrue.value': degToRad(0)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: false,

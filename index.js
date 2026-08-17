@@ -5,14 +5,15 @@ const PLUGIN_ID = 'autopilot-emulator-v2'
 const STATE_STANDBY = 'standby'
 const STATE_AUTO = 'auto'
 
-const MODES = ['compass', 'route', 'windApparent', 'windTrue']
+const MODES = ['compass', 'gps', 'windApparent', 'windTrue']
 const WIND_MODES = new Set(['windApparent', 'windTrue'])
 
 const DEFAULTS = {
   deviceId: 'virtual',
   defaultMode: 'compass',
   updateIntervalMs: 1000,
-  headingPath: 'navigation.headingMagnetic.value',
+  headingPath: 'navigation.headingTrue.value',
+  coursePath: 'navigation.courseOverGroundTrue.value',
   apparentWindAnglePath: 'environment.wind.angleApparent.value',
   trueWindAnglePath: 'environment.wind.angleTrueWater.value',
   outputPath: 'steering.autopilot.output.turnRate',
@@ -58,6 +59,11 @@ function pluginFactory(app) {
             type: 'string',
             title: 'Heading input path',
             default: DEFAULTS.headingPath
+          },
+          coursePath: {
+            type: 'string',
+            title: 'GPS course input path',
+            default: DEFAULTS.coursePath
           },
           apparentWindAnglePath: {
             type: 'string',
@@ -206,10 +212,11 @@ function createController(app, options) {
       publishOutput()
     },
     courseCurrentPoint: async () => {
-      selectedMode = 'route'
-      engage()
+      throw new Error('Route following is not implemented')
     },
-    courseNextPoint: async () => {}
+    courseNextPoint: async () => {
+      throw new Error('Route following is not implemented')
+    }
   }
 
   function getInfo() {
@@ -239,12 +246,12 @@ function createController(app, options) {
       {
         id: 'courseCurrentPoint',
         name: 'Steer to current course point',
-        available: true
+        available: false
       },
       {
         id: 'courseNextPoint',
         name: 'Advance to next course point',
-        available: selectedMode === 'route'
+        available: false
       }
     ]
   }
@@ -347,14 +354,35 @@ function calculateOutput(app, options, info) {
 }
 
 function readCurrentAngle(app, options, mode) {
-  const pathByMode = {
-    compass: options.headingPath,
-    route: options.headingPath,
-    windApparent: options.apparentWindAnglePath,
-    windTrue: options.trueWindAnglePath
+  const pathsByMode = {
+    compass: [options.headingPath],
+    gps: [options.coursePath],
+    windApparent: [options.apparentWindAnglePath],
+    windTrue: [options.trueWindAnglePath]
   }
-  const value = app.getSelfPath?.(pathByMode[mode])
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
+  for (const path of unique(pathsByMode[mode] ?? [])) {
+    const value = readSelfNumber(app, path)
+    if (value !== null) {
+      return value
+    }
+  }
+  return null
+}
+
+function readSelfNumber(app, path) {
+  const raw = app.getSelfPath?.(path)
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw
+  }
+  if (
+    raw &&
+    typeof raw === 'object' &&
+    typeof raw.value === 'number' &&
+    Number.isFinite(raw.value)
+  ) {
+    return raw.value
+  }
+  return null
 }
 
 function publishMetadata(app, options) {
@@ -399,6 +427,7 @@ function normalizeOptions(props) {
   options.maxTurnRate = positiveNumber(options.maxTurnRate, DEFAULTS.maxTurnRate)
   options.deviceId = nonEmptyString(options.deviceId, DEFAULTS.deviceId)
   options.headingPath = nonEmptyString(options.headingPath, DEFAULTS.headingPath)
+  options.coursePath = nonEmptyString(options.coursePath, DEFAULTS.coursePath)
   options.apparentWindAnglePath = nonEmptyString(
     options.apparentWindAnglePath,
     DEFAULTS.apparentWindAnglePath
@@ -420,6 +449,10 @@ function positiveNumber(value, fallback) {
 
 function nonEmptyString(value, fallback) {
   return typeof value === 'string' && value.trim() !== '' ? value : fallback
+}
+
+function unique(values) {
+  return [...new Set(values.filter((value) => typeof value === 'string'))]
 }
 
 function assertState(state) {
@@ -480,6 +513,7 @@ module.exports._internals = {
   createController,
   calculateOutput,
   normalizeOptions,
+  readCurrentAngle,
   normalizePi,
   normalizeTau,
   degToRad,
