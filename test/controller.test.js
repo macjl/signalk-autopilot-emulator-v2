@@ -9,7 +9,8 @@ const {
     calculateOutput,
     degToRad,
     DEFAULTS,
-    readCurrentAngle
+    readCurrentAngle,
+    readRouteTarget
   }
 } = require('../index')
 
@@ -23,7 +24,7 @@ test('starts in standby with clean v2 options', async () => {
         { name: 'standby', engaged: false },
         { name: 'auto', engaged: true }
       ],
-      modes: ['compass', 'gps', 'windApparent', 'windTrue'],
+      modes: ['compass', 'gps', 'route', 'windApparent', 'windTrue'],
       actions: [
         { id: 'dodge', name: 'Dodge', available: false },
         { id: 'tack', name: 'Tack', available: false },
@@ -31,7 +32,7 @@ test('starts in standby with clean v2 options', async () => {
         {
           id: 'courseCurrentPoint',
           name: 'Steer to current course point',
-          available: false
+          available: true
         },
         {
           id: 'courseNextPoint',
@@ -103,18 +104,97 @@ test('gps mode uses configured course input', () => {
   assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
 })
 
-test('route following actions are explicit non-implementations', async () => {
-  const app = fakeApp()
+test('courseCurrentPoint engages route mode', async () => {
+  const app = fakeApp({
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.headingTrue.value': degToRad(80)
+  })
   const controller = createController(app, DEFAULTS)
 
-  await assert.rejects(
-    () => controller.provider.courseCurrentPoint('virtual'),
-    /Route following is not implemented/
+  await controller.provider.courseCurrentPoint('virtual')
+  const data = await controller.provider.getData('virtual')
+
+  assert.equal(data.state, 'auto')
+  assert.equal(data.mode, 'route')
+  assertNear(data.target, degToRad(90))
+  assert.equal(
+    data.options.actions.find((action) => action.id === 'courseNextPoint')
+      .available,
+    true
   )
-  await assert.rejects(
-    () => controller.provider.courseNextPoint('virtual'),
-    /Route following is not implemented/
+})
+
+test('courseCurrentPoint without route data falls back to current heading', async () => {
+  const app = fakeApp({
+    'environment.wind.angleTrueWater.value': -degToRad(50),
+    'navigation.headingTrue.value': degToRad(123)
+  })
+  const controller = createController(app, {
+    ...DEFAULTS,
+    defaultMode: 'windTrue'
+  })
+
+  await controller.provider.engage('virtual')
+  assertNear((await controller.provider.getData('virtual')).target, -degToRad(50))
+
+  await controller.provider.courseCurrentPoint('virtual')
+  const data = await controller.provider.getData('virtual')
+
+  assert.equal(data.mode, 'route')
+  assertNear(data.target, degToRad(123))
+})
+
+test('courseNextPoint is unavailable after disengaging route mode', async () => {
+  const app = fakeApp({
+    'navigation.headingTrue.value': degToRad(123)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.courseCurrentPoint('virtual')
+  await controller.provider.disengage('virtual')
+  const data = await controller.provider.getData('virtual')
+
+  assert.equal(data.state, 'standby')
+  assert.equal(
+    data.options.actions.find((action) => action.id === 'courseNextPoint')
+      .available,
+    false
   )
+})
+
+test('route target applies cross-track correction', () => {
+  const app = fakeApp({
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.course.calcValues.crossTrackError.value': 100
+  })
+  const target = readRouteTarget(app, DEFAULTS)
+
+  assertNear(target, degToRad(90) - Math.atan(1))
+})
+
+test('route target uses magnetic fallback with variation', () => {
+  const app = fakeApp({
+    'navigation.course.calcValues.bearingTrackMagnetic.value': degToRad(90),
+    'navigation.magneticVariation.value': degToRad(5)
+  })
+  const target = readRouteTarget(app, DEFAULTS)
+
+  assertNear(target, degToRad(95))
+})
+
+test('route mode controls heading toward dynamic route target', () => {
+  const app = fakeApp({
+    'navigation.headingTrue.value': degToRad(80),
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90)
+  })
+  const output = calculateOutput(app, DEFAULTS, {
+    engaged: true,
+    mode: 'route',
+    target: readRouteTarget(app, DEFAULTS)
+  })
+
+  assertNear(output.error, degToRad(10))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
 })
 
 test('input reader accepts a Signal K path object as well as a value path', () => {

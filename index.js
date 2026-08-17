@@ -5,7 +5,7 @@ const PLUGIN_ID = 'autopilot-emulator-v2'
 const STATE_STANDBY = 'standby'
 const STATE_AUTO = 'auto'
 
-const MODES = ['compass', 'gps', 'windApparent', 'windTrue']
+const MODES = ['compass', 'gps', 'route', 'windApparent', 'windTrue']
 const WIND_MODES = new Set(['windApparent', 'windTrue'])
 
 const DEFAULTS = {
@@ -14,6 +14,13 @@ const DEFAULTS = {
   updateIntervalMs: 1000,
   headingPath: 'navigation.headingTrue.value',
   coursePath: 'navigation.courseOverGroundTrue.value',
+  routeTrackTruePath: 'navigation.course.calcValues.bearingTrackTrue.value',
+  routeTrackMagneticPath: 'navigation.course.calcValues.bearingTrackMagnetic.value',
+  routeBearingMagneticPath: 'navigation.course.calcValues.bearingMagnetic.value',
+  routeXtePath: 'navigation.course.calcValues.crossTrackError.value',
+  magneticVariationPath: 'navigation.magneticVariation.value',
+  routeXteLookahead: 100,
+  routeMaxXteCorrection: degToRad(60),
   apparentWindAnglePath: 'environment.wind.angleApparent.value',
   trueWindAnglePath: 'environment.wind.angleTrueWater.value',
   outputPath: 'steering.autopilot.output.turnRate',
@@ -64,6 +71,46 @@ function pluginFactory(app) {
             type: 'string',
             title: 'GPS course input path',
             default: DEFAULTS.coursePath
+          },
+          routeTrackTruePath: {
+            type: 'string',
+            title: 'Route true track input path',
+            default: DEFAULTS.routeTrackTruePath
+          },
+          routeTrackMagneticPath: {
+            type: 'string',
+            title: 'Route magnetic track fallback path',
+            default: DEFAULTS.routeTrackMagneticPath
+          },
+          routeBearingMagneticPath: {
+            type: 'string',
+            title: 'Route magnetic bearing fallback path',
+            default: DEFAULTS.routeBearingMagneticPath
+          },
+          routeXtePath: {
+            type: 'string',
+            title: 'Route cross-track error input path',
+            default: DEFAULTS.routeXtePath
+          },
+          magneticVariationPath: {
+            type: 'string',
+            title: 'Magnetic variation input path',
+            default: DEFAULTS.magneticVariationPath
+          },
+          routeXteLookahead: {
+            type: 'number',
+            title: 'Route XTE lookahead distance',
+            description:
+              'Cross-track error distance, in meters, that produces about half the maximum route correction.',
+            default: DEFAULTS.routeXteLookahead,
+            minimum: 1
+          },
+          routeMaxXteCorrection: {
+            type: 'number',
+            title: 'Route maximum XTE correction',
+            description: 'Maximum route correction in radians.',
+            default: DEFAULTS.routeMaxXteCorrection,
+            minimum: 0
           },
           apparentWindAnglePath: {
             type: 'string',
@@ -156,6 +203,9 @@ function createController(app, options) {
     setMode: async (mode) => {
       assertMode(mode)
       selectedMode = mode
+      if (selectedMode === 'route') {
+        target = readRouteTarget(app, options)
+      }
       ensureTargetForMode()
       publishAutopilot()
       publishOutput()
@@ -212,10 +262,14 @@ function createController(app, options) {
       publishOutput()
     },
     courseCurrentPoint: async () => {
-      throw new Error('Route following is not implemented')
+      selectedMode = 'route'
+      target = readRouteTarget(app, options)
+      dodgeBaseTarget = null
+      engage()
     },
     courseNextPoint: async () => {
-      throw new Error('Route following is not implemented')
+      // The route provider owns waypoint advancement. The emulator acknowledges
+      // the action so client flows can test the round-trip.
     }
   }
 
@@ -246,12 +300,12 @@ function createController(app, options) {
       {
         id: 'courseCurrentPoint',
         name: 'Steer to current course point',
-        available: false
+        available: true
       },
       {
         id: 'courseNextPoint',
         name: 'Advance to next course point',
-        available: false
+        available: engaged && selectedMode === 'route'
       }
     ]
   }
@@ -271,6 +325,13 @@ function createController(app, options) {
   }
 
   function ensureTargetForMode() {
+    if (selectedMode === 'route') {
+      const routeTarget = readRouteTarget(app, options)
+      if (routeTarget !== null) {
+        target = routeTarget
+        return
+      }
+    }
     if (target !== null) {
       target = normalizeTargetForMode(target, selectedMode)
       return
@@ -290,6 +351,7 @@ function createController(app, options) {
   }
 
   function publishAutopilot() {
+    refreshTargetForMode()
     app.autopilotUpdate(options.deviceId, {
       state: getInfo().state,
       mode: getInfo().mode,
@@ -300,6 +362,7 @@ function createController(app, options) {
   }
 
   function publishOutput() {
+    refreshTargetForMode()
     const output = calculateOutput(app, options, getInfo())
     app.handleMessage(PLUGIN_ID, {
       updates: [
@@ -311,6 +374,15 @@ function createController(app, options) {
         }
       ]
     })
+  }
+
+  function refreshTargetForMode() {
+    if (state === STATE_AUTO && selectedMode === 'route') {
+      const routeTarget = readRouteTarget(app, options)
+      if (routeTarget !== null) {
+        target = routeTarget
+      }
+    }
   }
 
   return {
@@ -357,6 +429,7 @@ function readCurrentAngle(app, options, mode) {
   const pathsByMode = {
     compass: [options.headingPath],
     gps: [options.coursePath],
+    route: [options.headingPath],
     windApparent: [options.apparentWindAnglePath],
     windTrue: [options.trueWindAnglePath]
   }
@@ -367,6 +440,43 @@ function readCurrentAngle(app, options, mode) {
     }
   }
   return null
+}
+
+function readRouteTarget(app, options) {
+  const trackTrue = readSelfNumber(app, options.routeTrackTruePath)
+  if (trackTrue !== null) {
+    return correctedRouteHeading(app, options, trackTrue)
+  }
+
+  const magneticVariation = readSelfNumber(app, options.magneticVariationPath)
+  for (const path of unique([
+    options.routeTrackMagneticPath,
+    options.routeBearingMagneticPath
+  ])) {
+    const value = readSelfNumber(app, path)
+    if (value !== null) {
+      return magneticHeadingToTrue(
+        correctedRouteHeading(app, options, value),
+        magneticVariation
+      )
+    }
+  }
+
+  return null
+}
+
+function correctedRouteHeading(app, options, trackHeading) {
+  const xte = readSelfNumber(app, options.routeXtePath)
+  if (xte === null) {
+    return normalizeTau(trackHeading)
+  }
+
+  const correction = clamp(
+    -Math.atan(xte / options.routeXteLookahead),
+    -options.routeMaxXteCorrection,
+    options.routeMaxXteCorrection
+  )
+  return normalizeTau(trackHeading + correction)
 }
 
 function readSelfNumber(app, path) {
@@ -428,6 +538,34 @@ function normalizeOptions(props) {
   options.deviceId = nonEmptyString(options.deviceId, DEFAULTS.deviceId)
   options.headingPath = nonEmptyString(options.headingPath, DEFAULTS.headingPath)
   options.coursePath = nonEmptyString(options.coursePath, DEFAULTS.coursePath)
+  options.routeTrackTruePath = nonEmptyString(
+    options.routeTrackTruePath,
+    DEFAULTS.routeTrackTruePath
+  )
+  options.routeTrackMagneticPath = nonEmptyString(
+    options.routeTrackMagneticPath,
+    DEFAULTS.routeTrackMagneticPath
+  )
+  options.routeBearingMagneticPath = nonEmptyString(
+    options.routeBearingMagneticPath,
+    DEFAULTS.routeBearingMagneticPath
+  )
+  options.routeXtePath = nonEmptyString(
+    options.routeXtePath,
+    DEFAULTS.routeXtePath
+  )
+  options.magneticVariationPath = nonEmptyString(
+    options.magneticVariationPath,
+    DEFAULTS.magneticVariationPath
+  )
+  options.routeXteLookahead = positiveNumber(
+    options.routeXteLookahead,
+    DEFAULTS.routeXteLookahead
+  )
+  options.routeMaxXteCorrection = positiveNumber(
+    options.routeMaxXteCorrection,
+    DEFAULTS.routeMaxXteCorrection
+  )
   options.apparentWindAnglePath = nonEmptyString(
     options.apparentWindAnglePath,
     DEFAULTS.apparentWindAnglePath
@@ -508,12 +646,20 @@ function degToRad(degrees) {
   return degrees * (Math.PI / 180)
 }
 
+function magneticHeadingToTrue(headingMagnetic, magneticVariation) {
+  if (magneticVariation === null) {
+    return normalizeTau(headingMagnetic)
+  }
+  return normalizeTau(headingMagnetic + magneticVariation)
+}
+
 module.exports = pluginFactory
 module.exports._internals = {
   createController,
   calculateOutput,
   normalizeOptions,
   readCurrentAngle,
+  readRouteTarget,
   normalizePi,
   normalizeTau,
   degToRad,
