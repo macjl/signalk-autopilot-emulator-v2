@@ -12,7 +12,7 @@ const DEFAULTS = {
   deviceId: 'virtual',
   defaultMode: 'compass',
   updateIntervalMs: 1000,
-  headingPath: 'navigation.headingTrue.value',
+  headingPath: 'navigation.headingMagnetic.value',
   coursePath: 'navigation.courseOverGroundTrue.value',
   routeTrackTruePath: 'navigation.course.calcValues.bearingTrackTrue.value',
   routeTrackMagneticPath: 'navigation.course.calcValues.bearingTrackMagnetic.value',
@@ -203,9 +203,8 @@ function createController(app, options) {
     setMode: async (mode) => {
       assertMode(mode)
       selectedMode = mode
-      if (selectedMode === 'route') {
-        target = readRouteTarget(app, options)
-      }
+      target = readInitialTargetForMode()
+      dodgeBaseTarget = null
       ensureTargetForMode()
       publishAutopilot()
       publishOutput()
@@ -336,8 +335,18 @@ function createController(app, options) {
       target = normalizeTargetForMode(target, selectedMode)
       return
     }
+    target = readInitialTargetForMode()
+  }
+
+  function readInitialTargetForMode() {
+    if (selectedMode === 'route') {
+      const routeTarget = readRouteTarget(app, options)
+      if (routeTarget !== null) {
+        return routeTarget
+      }
+    }
     const current = readCurrentAngle(app, options, selectedMode)
-    target = current === null ? defaultTargetForMode(selectedMode) : current
+    return current === null ? defaultTargetForMode(selectedMode) : current
   }
 
   function setWindTargetSide(direction) {
@@ -443,22 +452,22 @@ function readCurrentAngle(app, options, mode) {
 }
 
 function readRouteTarget(app, options) {
+  const magneticVariation = readSelfNumber(app, options.magneticVariationPath)
   const trackTrue = readSelfNumber(app, options.routeTrackTruePath)
   if (trackTrue !== null) {
-    return correctedRouteHeading(app, options, trackTrue)
+    return trueHeadingToMagnetic(
+      correctedRouteHeading(app, options, trackTrue),
+      magneticVariation
+    )
   }
 
-  const magneticVariation = readSelfNumber(app, options.magneticVariationPath)
   for (const path of unique([
     options.routeTrackMagneticPath,
     options.routeBearingMagneticPath
   ])) {
     const value = readSelfNumber(app, path)
     if (value !== null) {
-      return magneticHeadingToTrue(
-        correctedRouteHeading(app, options, value),
-        magneticVariation
-      )
+      return correctedRouteHeading(app, options, value)
     }
   }
 
@@ -646,11 +655,11 @@ function degToRad(degrees) {
   return degrees * (Math.PI / 180)
 }
 
-function magneticHeadingToTrue(headingMagnetic, magneticVariation) {
+function trueHeadingToMagnetic(headingTrue, magneticVariation) {
   if (magneticVariation === null) {
-    return normalizeTau(headingMagnetic)
+    return normalizeTau(headingTrue)
   }
-  return normalizeTau(headingMagnetic + magneticVariation)
+  return normalizeTau(headingTrue - magneticVariation)
 }
 
 module.exports = pluginFactory

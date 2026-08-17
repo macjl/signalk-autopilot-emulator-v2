@@ -50,7 +50,7 @@ test('starts in standby with clean v2 options', async () => {
 
 test('engage initializes compass target from current heading', async () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(123)
+    'navigation.headingMagnetic.value': degToRad(123)
   })
   const controller = createController(app, DEFAULTS)
 
@@ -65,7 +65,7 @@ test('engage initializes compass target from current heading', async () => {
 
 test('heading controller commands starboard turn for positive heading error', () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(10)
+    'navigation.headingMagnetic.value': degToRad(10)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: true,
@@ -104,10 +104,71 @@ test('gps mode uses configured course input', () => {
   assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
 })
 
+test('switching to compass captures current magnetic heading', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(123),
+    'environment.wind.angleApparent.value': degToRad(35)
+  })
+  const controller = createController(app, {
+    ...DEFAULTS,
+    defaultMode: 'windApparent'
+  })
+
+  await controller.provider.engage('virtual')
+  await controller.provider.setTarget(degToRad(40), 'virtual')
+  await controller.provider.setMode('compass', 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assert.equal(data.mode, 'compass')
+  assertNear(data.target, degToRad(123))
+  assertNear(output.error, 0)
+  assertNear(output.turnRate, 0)
+})
+
+test('switching to apparent wind captures current wind angle', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(10),
+    'environment.wind.angleApparent.value': degToRad(35)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.engage('virtual')
+  await controller.provider.setTarget(degToRad(90), 'virtual')
+  await controller.provider.setMode('windApparent', 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assert.equal(data.mode, 'windApparent')
+  assertNear(data.target, degToRad(35))
+  assertNear(output.error, 0)
+  assertNear(output.turnRate, 0)
+})
+
+test('switching to true wind captures current wind angle', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(10),
+    'environment.wind.angleTrueWater.value': -degToRad(42)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.engage('virtual')
+  await controller.provider.setTarget(degToRad(90), 'virtual')
+  await controller.provider.setMode('windTrue', 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assert.equal(data.mode, 'windTrue')
+  assertNear(data.target, -degToRad(42))
+  assertNear(output.error, 0)
+  assertNear(output.turnRate, 0)
+})
+
 test('courseCurrentPoint engages route mode', async () => {
   const app = fakeApp({
     'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
-    'navigation.headingTrue.value': degToRad(80)
+    'navigation.headingMagnetic.value': degToRad(80),
+    'navigation.magneticVariation.value': degToRad(5)
   })
   const controller = createController(app, DEFAULTS)
 
@@ -116,7 +177,7 @@ test('courseCurrentPoint engages route mode', async () => {
 
   assert.equal(data.state, 'auto')
   assert.equal(data.mode, 'route')
-  assertNear(data.target, degToRad(90))
+  assertNear(data.target, degToRad(85))
   assert.equal(
     data.options.actions.find((action) => action.id === 'courseNextPoint')
       .available,
@@ -127,7 +188,7 @@ test('courseCurrentPoint engages route mode', async () => {
 test('courseCurrentPoint without route data falls back to current heading', async () => {
   const app = fakeApp({
     'environment.wind.angleTrueWater.value': -degToRad(50),
-    'navigation.headingTrue.value': degToRad(123)
+    'navigation.headingMagnetic.value': degToRad(123)
   })
   const controller = createController(app, {
     ...DEFAULTS,
@@ -146,7 +207,7 @@ test('courseCurrentPoint without route data falls back to current heading', asyn
 
 test('courseNextPoint is unavailable after disengaging route mode', async () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(123)
+    'navigation.headingMagnetic.value': degToRad(123)
   })
   const controller = createController(app, DEFAULTS)
 
@@ -172,20 +233,31 @@ test('route target applies cross-track correction', () => {
   assertNear(target, degToRad(90) - Math.atan(1))
 })
 
-test('route target uses magnetic fallback with variation', () => {
+test('route target converts true track to magnetic with variation', () => {
+  const app = fakeApp({
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.magneticVariation.value': degToRad(5)
+  })
+  const target = readRouteTarget(app, DEFAULTS)
+
+  assertNear(target, degToRad(85))
+})
+
+test('route target uses magnetic fallback as magnetic', () => {
   const app = fakeApp({
     'navigation.course.calcValues.bearingTrackMagnetic.value': degToRad(90),
     'navigation.magneticVariation.value': degToRad(5)
   })
   const target = readRouteTarget(app, DEFAULTS)
 
-  assertNear(target, degToRad(95))
+  assertNear(target, degToRad(90))
 })
 
 test('route mode controls heading toward dynamic route target', () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(80),
-    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90)
+    'navigation.headingMagnetic.value': degToRad(80),
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.magneticVariation.value': degToRad(5)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: true,
@@ -193,13 +265,13 @@ test('route mode controls heading toward dynamic route target', () => {
     target: readRouteTarget(app, DEFAULTS)
   })
 
-  assertNear(output.error, degToRad(10))
-  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+  assertNear(output.error, degToRad(5))
+  assertNear(output.turnRate, degToRad(5) * DEFAULTS.gain)
 })
 
 test('input reader accepts a Signal K path object as well as a value path', () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': {
+    'navigation.headingMagnetic.value': {
       value: degToRad(42)
     }
   })
@@ -209,7 +281,7 @@ test('input reader accepts a Signal K path object as well as a value path', () =
 
 test('heading controller saturates turn-rate output', () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(0)
+    'navigation.headingMagnetic.value': degToRad(0)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: true,
@@ -236,7 +308,7 @@ test('wind controller uses opposite sign because wind angle is relative to bow',
 
 test('standby publishes zero output', () => {
   const app = fakeApp({
-    'navigation.headingTrue.value': degToRad(0)
+    'navigation.headingMagnetic.value': degToRad(0)
   })
   const output = calculateOutput(app, DEFAULTS, {
     engaged: false,
@@ -282,4 +354,13 @@ function fakeApp(paths = {}) {
 
 function assertNear(actual, expected, epsilon = 1e-12) {
   assert.equal(Math.abs(actual - expected) < epsilon, true)
+}
+
+function lastOutput(app) {
+  const message = app.messages.at(-1)
+  const values = message.delta.updates[0].values
+  return {
+    turnRate: values.find((entry) => entry.path === DEFAULTS.outputPath).value,
+    error: values.find((entry) => entry.path === DEFAULTS.errorPath).value
+  }
 }
