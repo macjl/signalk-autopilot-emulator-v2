@@ -1,25 +1,44 @@
 {
   "name": "signalk-autopilot-emulator-v2",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Signal K Autopilot API v2 virtual autopilot with turn-rate output",
   "main": "index.js",
   "files": [
     "index.js",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test"
   },
   "keywords": [
-    "signalk-node-server-plugin"
+    "signalk-node-server-plugin",
+    "signalk-category-utility",
+    "signalk",
+    "autopilot",
+    "emulator",
+    "simulator"
   ],
-  "author": "macjl",
+  "author": "Jean-Laurent Girod (@macjl)",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/macjl/signalk-autopilot-emulator-v2#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/macjl/signalk-autopilot-emulator-v2"
+    "url": "git+https://github.com/macjl/signalk-autopilot-emulator-v2.git"
+  },
+  "bugs": {
+    "url": "https://github.com/macjl/signalk-autopilot-emulator-v2/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": {
+    "displayName": "Autopilot Emulator v2",
+    "recommends": [
+      "signalk-sailboat-simulator"
+    ]
   }
 }

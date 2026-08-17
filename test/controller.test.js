@@ -10,6 +10,7 @@ const {
     degToRad,
     DEFAULTS,
     adjustedTargetForMode,
+    normalizeOptions,
     readCurrentAngle,
     readRouteTarget
   }
@@ -33,7 +34,7 @@ test('starts in standby with clean v2 options', async () => {
         {
           id: 'courseCurrentPoint',
           name: 'Steer to current course point',
-          available: true
+          available: false
         },
         {
           id: 'courseNextPoint',
@@ -184,6 +185,31 @@ test('positive wind target adjustment commands starboard on port tack', async ()
   assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
 })
 
+test('positive wind dodge commands starboard on port tack and restores target', async () => {
+  const app = fakeApp({
+    'environment.wind.angleApparent.value': -degToRad(35)
+  })
+  const controller = createController(app, {
+    ...DEFAULTS,
+    defaultMode: 'windApparent'
+  })
+
+  await controller.provider.engage('virtual')
+  await controller.provider.dodge(degToRad(10), 'virtual')
+  let data = await controller.provider.getData('virtual')
+  let output = lastOutput(app)
+
+  assertNear(data.target, -degToRad(45))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+
+  await controller.provider.dodge(null, 'virtual')
+  data = await controller.provider.getData('virtual')
+  output = lastOutput(app)
+
+  assertNear(data.target, -degToRad(35))
+  assertNear(output.turnRate, 0)
+})
+
 test('positive wind target adjustment commands starboard on starboard tack', async () => {
   const app = fakeApp({
     'environment.wind.angleApparent.value': degToRad(35)
@@ -240,7 +266,7 @@ test('courseCurrentPoint engages route mode', async () => {
   )
 })
 
-test('courseCurrentPoint without route data falls back to current heading', async () => {
+test('courseCurrentPoint without route data is rejected', async () => {
   const app = fakeApp({
     'environment.wind.angleTrueWater.value': -degToRad(50),
     'navigation.headingMagnetic.value': degToRad(123)
@@ -253,16 +279,21 @@ test('courseCurrentPoint without route data falls back to current heading', asyn
   await controller.provider.engage('virtual')
   assertNear((await controller.provider.getData('virtual')).target, -degToRad(50))
 
-  await controller.provider.courseCurrentPoint('virtual')
+  await assert.rejects(
+    () => controller.provider.courseCurrentPoint('virtual'),
+    /Route data unavailable/
+  )
   const data = await controller.provider.getData('virtual')
 
-  assert.equal(data.mode, 'route')
-  assertNear(data.target, degToRad(123))
+  assert.equal(data.mode, 'windTrue')
+  assertNear(data.target, -degToRad(50))
 })
 
 test('courseNextPoint is unavailable after disengaging route mode', async () => {
   const app = fakeApp({
-    'navigation.headingMagnetic.value': degToRad(123)
+    'navigation.headingMagnetic.value': degToRad(123),
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.magneticVariation.value': degToRad(5)
   })
   const controller = createController(app, DEFAULTS)
 
@@ -271,11 +302,33 @@ test('courseNextPoint is unavailable after disengaging route mode', async () => 
   const data = await controller.provider.getData('virtual')
 
   assert.equal(data.state, 'standby')
+  assert.equal(data.target, null)
   assert.equal(
     data.options.actions.find((action) => action.id === 'courseNextPoint')
       .available,
     false
   )
+})
+
+test('route target is read-only', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(80),
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
+    'navigation.magneticVariation.value': degToRad(5)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.courseCurrentPoint('virtual')
+
+  await assert.rejects(
+    () => controller.provider.setTarget(degToRad(100), 'virtual'),
+    /Cannot set target in route mode/
+  )
+  await assert.rejects(
+    () => controller.provider.adjustTarget(degToRad(10), 'virtual'),
+    /Cannot adjust target in route mode/
+  )
+  assertNear((await controller.provider.getData('virtual')).target, degToRad(85))
 })
 
 test('route target applies cross-track correction', () => {
@@ -387,6 +440,58 @@ test('standby publishes zero output', () => {
   })
 
   assert.deepEqual(output, { turnRate: 0, error: null })
+})
+
+test('disengage clears exposed mode and target', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(35)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.engage('virtual')
+  await controller.provider.disengage('virtual')
+  const data = await controller.provider.getData('virtual')
+
+  assert.equal(data.state, 'standby')
+  assert.equal(data.mode, null)
+  assert.equal(data.target, null)
+  assert.equal(await controller.provider.getTarget('virtual'), null)
+})
+
+test('standby rejects active target and maneuver commands', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(35),
+    'environment.wind.angleApparent.value': degToRad(35)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await assert.rejects(
+    () => controller.provider.setTarget(degToRad(40), 'virtual'),
+    /Cannot set target while autopilot is in standby/
+  )
+  await assert.rejects(
+    () => controller.provider.adjustTarget(degToRad(10), 'virtual'),
+    /Cannot adjust target while autopilot is in standby/
+  )
+  await assert.rejects(
+    () => controller.provider.dodge(degToRad(10), 'virtual'),
+    /Cannot dodge while autopilot is in standby/
+  )
+  await assert.rejects(
+    () => controller.provider.tack('port', 'virtual'),
+    /Cannot tack while autopilot is in standby/
+  )
+  await assert.rejects(
+    () => controller.provider.courseNextPoint('virtual'),
+    /Cannot advance course point while autopilot is in standby/
+  )
+})
+
+test('normalizes configured minimums', () => {
+  assert.equal(normalizeOptions({ updateIntervalMs: 0 }).updateIntervalMs, 1000)
+  assert.equal(normalizeOptions({ updateIntervalMs: 100 }).updateIntervalMs, 100)
+  assert.equal(normalizeOptions({ routeXteLookahead: 0 }).routeXteLookahead, 100)
+  assert.equal(normalizeOptions({ routeXteLookahead: 1 }).routeXteLookahead, 1)
 })
 
 test('tack sets wind target side', async () => {

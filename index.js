@@ -209,9 +209,11 @@ function createController(app, options) {
       publishAutopilot()
       publishOutput()
     },
-    getTarget: async () => target,
+    getTarget: async () => getInfo().target,
     setTarget: async (value) => {
       assertNumber(value, 'target')
+      assertEngaged(state, 'set target')
+      assertWritableTargetMode(selectedMode, 'set target')
       target = normalizeTargetForMode(value, selectedMode)
       dodgeBaseTarget = null
       publishAutopilot()
@@ -219,6 +221,8 @@ function createController(app, options) {
     },
     adjustTarget: async (value) => {
       assertNumber(value, 'target adjustment')
+      assertEngaged(state, 'adjust target')
+      assertWritableTargetMode(selectedMode, 'adjust target')
       ensureTargetForMode()
       target = adjustedTargetForMode(target ?? 0, value, selectedMode)
       dodgeBaseTarget = null
@@ -232,18 +236,21 @@ function createController(app, options) {
       disengage()
     },
     tack: async (direction) => {
+      assertEngaged(state, 'tack')
       assertWindMode(selectedMode, 'tack')
       setWindTargetSide(direction)
       publishAutopilot()
       publishOutput()
     },
     gybe: async (direction) => {
+      assertEngaged(state, 'gybe')
       assertWindMode(selectedMode, 'gybe')
       setWindTargetSide(direction)
       publishAutopilot()
       publishOutput()
     },
     dodge: async (value) => {
+      assertEngaged(state, 'dodge')
       if (value === null) {
         if (dodgeBaseTarget !== null) {
           target = dodgeBaseTarget
@@ -255,18 +262,26 @@ function createController(app, options) {
         if (dodgeBaseTarget === null) {
           dodgeBaseTarget = target
         }
-        target = normalizeTargetForMode((dodgeBaseTarget ?? 0) + value, selectedMode)
+        target = adjustedTargetForMode(dodgeBaseTarget ?? 0, value, selectedMode)
       }
       publishAutopilot()
       publishOutput()
     },
     courseCurrentPoint: async () => {
+      const routeTarget = readRouteTarget(app, options)
+      if (routeTarget === null) {
+        throw commandError('Route data unavailable', 409)
+      }
       selectedMode = 'route'
-      target = readRouteTarget(app, options)
+      target = routeTarget
       dodgeBaseTarget = null
       engage()
     },
     courseNextPoint: async () => {
+      assertEngaged(state, 'advance course point')
+      if (selectedMode !== 'route') {
+        throw commandError('Cannot advance course point outside route mode', 409)
+      }
       // The route provider owns waypoint advancement. The emulator acknowledges
       // the action so client flows can test the round-trip.
     }
@@ -286,12 +301,13 @@ function createController(app, options) {
       state,
       mode: engaged ? selectedMode : null,
       engaged,
-      target
+      target: engaged ? target : null
     }
   }
 
   function getActions(engaged) {
     const windMode = WIND_MODES.has(selectedMode)
+    const routeAvailable = readRouteTarget(app, options) !== null
     return [
       { id: 'dodge', name: 'Dodge', available: engaged },
       { id: 'tack', name: 'Tack', available: engaged && windMode },
@@ -299,7 +315,7 @@ function createController(app, options) {
       {
         id: 'courseCurrentPoint',
         name: 'Steer to current course point',
-        available: true
+        available: routeAvailable
       },
       {
         id: 'courseNextPoint',
@@ -318,6 +334,7 @@ function createController(app, options) {
 
   function disengage() {
     state = STATE_STANDBY
+    target = null
     dodgeBaseTarget = null
     publishAutopilot()
     publishOutput()
@@ -538,9 +555,10 @@ function normalizeOptions(props) {
   if (!MODES.includes(options.defaultMode)) {
     options.defaultMode = DEFAULTS.defaultMode
   }
-  options.updateIntervalMs = positiveNumber(
+  options.updateIntervalMs = numberAtLeast(
     options.updateIntervalMs,
-    DEFAULTS.updateIntervalMs
+    DEFAULTS.updateIntervalMs,
+    100
   )
   options.gain = positiveNumber(options.gain, DEFAULTS.gain)
   options.maxTurnRate = positiveNumber(options.maxTurnRate, DEFAULTS.maxTurnRate)
@@ -567,9 +585,10 @@ function normalizeOptions(props) {
     options.magneticVariationPath,
     DEFAULTS.magneticVariationPath
   )
-  options.routeXteLookahead = positiveNumber(
+  options.routeXteLookahead = numberAtLeast(
     options.routeXteLookahead,
-    DEFAULTS.routeXteLookahead
+    DEFAULTS.routeXteLookahead,
+    1
   )
   options.routeMaxXteCorrection = positiveNumber(
     options.routeMaxXteCorrection,
@@ -590,6 +609,12 @@ function normalizeOptions(props) {
 
 function positiveNumber(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback
+}
+
+function numberAtLeast(value, fallback, minimum) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= minimum
     ? value
     : fallback
 }
@@ -620,10 +645,28 @@ function assertWindMode(mode, action) {
   }
 }
 
+function assertEngaged(state, action) {
+  if (state !== STATE_AUTO) {
+    throw commandError(`Cannot ${action} while autopilot is in standby`, 409)
+  }
+}
+
+function assertWritableTargetMode(mode, action) {
+  if (mode === 'route') {
+    throw commandError(`Cannot ${action} in route mode`, 409)
+  }
+}
+
 function assertNumber(value, label) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`Invalid ${label}: ${value}`)
   }
+}
+
+function commandError(message, statusCode = 400) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  return error
 }
 
 function normalizeTargetForMode(value, mode) {

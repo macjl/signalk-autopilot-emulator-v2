@@ -35,5 +35,5 @@ Inputs are intentionally mode-specific. `compass` reads the configured heading p
 
 ```sh
 npm pack
-npm install ./signalk-autopilot-emulator-v2-0.1.6.tgz
+npm install ./signalk-autopilot-emulator-v2-0.1.7.tgz
 ```
