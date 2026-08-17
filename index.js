@@ -220,7 +220,7 @@ function createController(app, options) {
     adjustTarget: async (value) => {
       assertNumber(value, 'target adjustment')
       ensureTargetForMode()
-      target = normalizeTargetForMode((target ?? 0) + value, selectedMode)
+      target = adjustedTargetForMode(target ?? 0, value, selectedMode)
       dodgeBaseTarget = null
       publishAutopilot()
       publishOutput()
@@ -630,6 +630,11 @@ function normalizeTargetForMode(value, mode) {
   return WIND_MODES.has(mode) ? normalizePi(value) : normalizeTau(value)
 }
 
+function adjustedTargetForMode(target, adjustment, mode) {
+  const signedAdjustment = WIND_MODES.has(mode) ? -adjustment : adjustment
+  return normalizeTargetForMode(target + signedAdjustment, mode)
+}
+
 function defaultTargetForMode(mode) {
   return WIND_MODES.has(mode) ? degToRad(45) : 0
 }
@@ -669,6 +674,7 @@ module.exports._internals = {
   normalizeOptions,
   readCurrentAngle,
   readRouteTarget,
+  adjustedTargetForMode,
   normalizePi,
   normalizeTau,
   degToRad,

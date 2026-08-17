@@ -9,6 +9,7 @@ const {
     calculateOutput,
     degToRad,
     DEFAULTS,
+    adjustedTargetForMode,
     readCurrentAngle,
     readRouteTarget
   }
@@ -164,6 +165,60 @@ test('switching to true wind captures current wind angle', async () => {
   assertNear(output.turnRate, 0)
 })
 
+test('positive wind target adjustment commands starboard on port tack', async () => {
+  const app = fakeApp({
+    'environment.wind.angleApparent.value': -degToRad(35)
+  })
+  const controller = createController(app, {
+    ...DEFAULTS,
+    defaultMode: 'windApparent'
+  })
+
+  await controller.provider.engage('virtual')
+  await controller.provider.adjustTarget(degToRad(10), 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assertNear(data.target, -degToRad(45))
+  assertNear(output.error, -degToRad(10))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+})
+
+test('positive wind target adjustment commands starboard on starboard tack', async () => {
+  const app = fakeApp({
+    'environment.wind.angleApparent.value': degToRad(35)
+  })
+  const controller = createController(app, {
+    ...DEFAULTS,
+    defaultMode: 'windApparent'
+  })
+
+  await controller.provider.engage('virtual')
+  await controller.provider.adjustTarget(degToRad(10), 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assertNear(data.target, degToRad(25))
+  assertNear(output.error, -degToRad(10))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+})
+
+test('compass target adjustment remains numerically positive to starboard', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(35)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.engage('virtual')
+  await controller.provider.adjustTarget(degToRad(10), 'virtual')
+  const data = await controller.provider.getData('virtual')
+  const output = lastOutput(app)
+
+  assertNear(data.target, degToRad(45))
+  assertNear(output.error, degToRad(10))
+  assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+})
+
 test('courseCurrentPoint engages route mode', async () => {
   const app = fakeApp({
     'navigation.course.calcValues.bearingTrackTrue.value': degToRad(90),
@@ -304,6 +359,21 @@ test('wind controller uses opposite sign because wind angle is relative to bow',
 
   assertNear(output.error, degToRad(10))
   assertNear(output.turnRate, -degToRad(10) * DEFAULTS.gain)
+})
+
+test('wind target adjustment is helm-directional, not signed-angle addition', () => {
+  assertNear(
+    adjustedTargetForMode(-degToRad(35), degToRad(10), 'windApparent'),
+    -degToRad(45)
+  )
+  assertNear(
+    adjustedTargetForMode(degToRad(35), degToRad(10), 'windApparent'),
+    degToRad(25)
+  )
+  assertNear(
+    adjustedTargetForMode(degToRad(35), degToRad(10), 'compass'),
+    degToRad(45)
+  )
 })
 
 test('standby publishes zero output', () => {
