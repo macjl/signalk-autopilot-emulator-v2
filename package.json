@@ -1,0 +1,25 @@
+{
+  "name": "signalk-autopilot-emulator-v2",
+  "version": "0.1.0",
+  "description": "Signal K Autopilot API v2 virtual autopilot with turn-rate output",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "signalk-node-server-plugin"
+  ],
+  "author": "macjl",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/macjl/signalk-autopilot-emulator-v2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
