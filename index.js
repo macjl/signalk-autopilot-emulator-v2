@@ -378,6 +378,9 @@ function createController(app, options) {
 
   function publishAutopilot() {
     refreshTargetForMode()
+    if (typeof app.autopilotUpdate !== 'function') {
+      return
+    }
     app.autopilotUpdate(options.deviceId, {
       state: getInfo().state,
       mode: getInfo().mode,

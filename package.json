@@ -6,6 +6,8 @@
   "files": [
     "index.js",
     "README.md",
+    "CHANGELOG.md",
+    "assets",
     "LICENSE"
   ],
   "scripts": {
@@ -39,6 +41,9 @@
     "displayName": "Autopilot Emulator v2",
     "recommends": [
       "signalk-sailboat-simulator"
+    ],
+    "screenshots": [
+      "./assets/screenshot.svg"
     ]
   }
 }

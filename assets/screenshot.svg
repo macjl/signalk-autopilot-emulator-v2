@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Autopilot Emulator v2</title>
+  <desc id="desc">Signal K virtual autopilot provider with compass, GPS, route and wind modes.</desc>
+  <rect width="1280" height="720" fill="#102027"/>
+  <rect x="96" y="84" width="1088" height="552" rx="18" fill="#f7f9fb"/>
+  <text x="152" y="165" fill="#102027" font-family="Arial, sans-serif" font-size="48" font-weight="700">Autopilot Emulator v2</text>
+  <text x="152" y="220" fill="#48606a" font-family="Arial, sans-serif" font-size="28">Signal K Autopilot API v2 provider</text>
+  <g font-family="Arial, sans-serif" font-size="24">
+    <rect x="152" y="285" width="180" height="72" rx="8" fill="#dfe8ed"/>
+    <text x="242" y="330" fill="#102027" text-anchor="middle">compass</text>
+    <rect x="356" y="285" width="180" height="72" rx="8" fill="#dfe8ed"/>
+    <text x="446" y="330" fill="#102027" text-anchor="middle">gps</text>
+    <rect x="560" y="285" width="180" height="72" rx="8" fill="#dfe8ed"/>
+    <text x="650" y="330" fill="#102027" text-anchor="middle">route</text>
+    <rect x="764" y="285" width="180" height="72" rx="8" fill="#dfe8ed"/>
+    <text x="854" y="330" fill="#102027" text-anchor="middle">wind AWA</text>
+    <rect x="968" y="285" width="180" height="72" rx="8" fill="#dfe8ed"/>
+    <text x="1058" y="330" fill="#102027" text-anchor="middle">wind TWA</text>
+  </g>
+  <path d="M180 500h310l90-96 105 128 82-72h328" fill="none" stroke="#00897b" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="580" cy="404" r="16" fill="#00897b"/>
+  <circle cx="685" cy="532" r="16" fill="#00897b"/>
+  <text x="152" y="588" fill="#48606a" font-family="Arial, sans-serif" font-size="26">Outputs turn-rate commands for simulators, virtual boats and actuator experiments.</text>
+</svg>
