@@ -13,6 +13,9 @@ It intentionally has no webapp and does not implement legacy v1 PUT handlers. Cl
 - Supports `standby` and `auto` states.
 - Supports `compass`, `gps`, `route`, `windApparent` and `windTrue` modes.
 - Publishes a controller output at `steering.autopilot.output.turnRate`.
+- Persists the selected mode, engagement state, target and any active dodge in
+  the plugin data directory, so they are restored after a Signal K restart.
+  Route mode resumes from the current route data rather than a stale heading.
 
 The turn-rate output is in `rad/s`. Positive values command a turn to starboard. In `compass` mode the output is proportional to `target - heading`; in `gps` mode it is proportional to `target - course over ground`; in `route` mode it is proportional to the dynamic route target heading minus heading; in wind modes the sign is reversed because wind angle is relative to the bow.
 
@@ -29,7 +32,7 @@ Route mode follows the same simple logic as the legacy emulator work: route targ
 - `environment.wind.angleApparent.value`
 - `environment.wind.angleTrueWater.value`
 
-Inputs are intentionally mode-specific. `compass` reads the configured heading path, `gps` reads the configured course path, and `route` reads the configured route paths; the plugin does not silently fall back from heading to course over ground.
+Inputs are intentionally mode-specific and fixed to the default paths above. `compass` reads magnetic heading, `gps` reads course over ground, and `route` reads the route paths; the plugin does not silently fall back from heading to course over ground.
 
 ## Install From A Local Pack
 

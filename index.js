@@ -1,12 +1,30 @@
 'use strict'
 
+const fs = require('node:fs')
+const path = require('node:path')
+
 const PLUGIN_ID = 'autopilot-emulator-v2'
+const STATE_FILE_NAME = 'controller-state.json'
+const STATE_FILE_VERSION = 1
 
 const STATE_STANDBY = 'standby'
 const STATE_AUTO = 'auto'
 
 const MODES = ['compass', 'gps', 'route', 'windApparent', 'windTrue']
 const WIND_MODES = new Set(['windApparent', 'windTrue'])
+const PATH_OPTION_NAMES = [
+  'headingPath',
+  'coursePath',
+  'routeTrackTruePath',
+  'routeTrackMagneticPath',
+  'routeBearingMagneticPath',
+  'routeXtePath',
+  'magneticVariationPath',
+  'apparentWindAnglePath',
+  'trueWindAnglePath',
+  'outputPath',
+  'errorPath'
+]
 
 const DEFAULTS = {
   deviceId: 'virtual',
@@ -62,41 +80,6 @@ function pluginFactory(app) {
             default: DEFAULTS.updateIntervalMs,
             minimum: 100
           },
-          headingPath: {
-            type: 'string',
-            title: 'Heading input path',
-            default: DEFAULTS.headingPath
-          },
-          coursePath: {
-            type: 'string',
-            title: 'GPS course input path',
-            default: DEFAULTS.coursePath
-          },
-          routeTrackTruePath: {
-            type: 'string',
-            title: 'Route true track input path',
-            default: DEFAULTS.routeTrackTruePath
-          },
-          routeTrackMagneticPath: {
-            type: 'string',
-            title: 'Route magnetic track fallback path',
-            default: DEFAULTS.routeTrackMagneticPath
-          },
-          routeBearingMagneticPath: {
-            type: 'string',
-            title: 'Route magnetic bearing fallback path',
-            default: DEFAULTS.routeBearingMagneticPath
-          },
-          routeXtePath: {
-            type: 'string',
-            title: 'Route cross-track error input path',
-            default: DEFAULTS.routeXtePath
-          },
-          magneticVariationPath: {
-            type: 'string',
-            title: 'Magnetic variation input path',
-            default: DEFAULTS.magneticVariationPath
-          },
           routeXteLookahead: {
             type: 'number',
             title: 'Route XTE lookahead distance',
@@ -111,26 +94,6 @@ function pluginFactory(app) {
             description: 'Maximum route correction in radians.',
             default: DEFAULTS.routeMaxXteCorrection,
             minimum: 0
-          },
-          apparentWindAnglePath: {
-            type: 'string',
-            title: 'Apparent wind angle input path',
-            default: DEFAULTS.apparentWindAnglePath
-          },
-          trueWindAnglePath: {
-            type: 'string',
-            title: 'True wind angle input path',
-            default: DEFAULTS.trueWindAnglePath
-          },
-          outputPath: {
-            type: 'string',
-            title: 'Turn-rate output path',
-            default: DEFAULTS.outputPath
-          },
-          errorPath: {
-            type: 'string',
-            title: 'Control error output path',
-            default: DEFAULTS.errorPath
           },
           gain: {
             type: 'number',
@@ -183,10 +146,11 @@ function pluginFactory(app) {
 }
 
 function createController(app, options) {
-  let state = STATE_STANDBY
-  let selectedMode = options.defaultMode
-  let target = null
-  let dodgeBaseTarget = null
+  const restored = loadControllerState(app, options)
+  let state = restored.state
+  let selectedMode = restored.mode
+  let target = restored.target
+  let dodgeBaseTarget = restored.dodgeBaseTarget
 
   const provider = {
     getData: async () => getInfo(),
@@ -205,6 +169,7 @@ function createController(app, options) {
       selectedMode = mode
       target = readInitialTargetForMode()
       dodgeBaseTarget = null
+      persistState()
       ensureTargetForMode()
       publishAutopilot()
       publishOutput()
@@ -216,6 +181,7 @@ function createController(app, options) {
       assertWritableTargetMode(selectedMode, 'set target')
       target = normalizeTargetForMode(value, selectedMode)
       dodgeBaseTarget = null
+      persistState()
       publishAutopilot()
       publishOutput()
     },
@@ -226,6 +192,7 @@ function createController(app, options) {
       ensureTargetForMode()
       target = adjustedTargetForMode(target ?? 0, value, selectedMode)
       dodgeBaseTarget = null
+      persistState()
       publishAutopilot()
       publishOutput()
     },
@@ -239,6 +206,7 @@ function createController(app, options) {
       assertEngaged(state, 'tack')
       assertWindMode(selectedMode, 'tack')
       setWindTargetSide(direction)
+      persistState()
       publishAutopilot()
       publishOutput()
     },
@@ -246,6 +214,7 @@ function createController(app, options) {
       assertEngaged(state, 'gybe')
       assertWindMode(selectedMode, 'gybe')
       setWindTargetSide(direction)
+      persistState()
       publishAutopilot()
       publishOutput()
     },
@@ -264,6 +233,7 @@ function createController(app, options) {
         }
         target = adjustedTargetForMode(dodgeBaseTarget ?? 0, value, selectedMode)
       }
+      persistState()
       publishAutopilot()
       publishOutput()
     },
@@ -328,6 +298,7 @@ function createController(app, options) {
   function engage() {
     state = STATE_AUTO
     ensureTargetForMode()
+    persistState()
     publishAutopilot()
     publishOutput()
   }
@@ -336,8 +307,24 @@ function createController(app, options) {
     state = STATE_STANDBY
     target = null
     dodgeBaseTarget = null
+    persistState()
     publishAutopilot()
     publishOutput()
+  }
+
+  function persistState() {
+    saveControllerState(app, {
+      state,
+      mode: selectedMode,
+      target:
+        state === STATE_AUTO && selectedMode !== 'route'
+          ? target
+          : null,
+      dodgeBaseTarget:
+        state === STATE_AUTO && selectedMode !== 'route'
+          ? dodgeBaseTarget
+          : null
+    })
   }
 
   function ensureTargetForMode() {
@@ -420,10 +407,7 @@ function createController(app, options) {
     publishAutopilot,
     publishOutput,
     stop() {
-      if (state === STATE_AUTO) {
-        state = STATE_STANDBY
-        publishAutopilot()
-      }
+      persistState()
       app.handleMessage(PLUGIN_ID, {
         updates: [
           {
@@ -553,6 +537,110 @@ function publishMetadata(app, options) {
   })
 }
 
+function loadControllerState(app, options) {
+  const defaults = {
+    state: STATE_STANDBY,
+    mode: options.defaultMode,
+    target: null,
+    dodgeBaseTarget: null
+  }
+  const filename = controllerStatePath(app)
+  if (filename === null) {
+    return defaults
+  }
+
+  try {
+    const persisted = JSON.parse(fs.readFileSync(filename, 'utf8'))
+    if (
+      !persisted ||
+      persisted.version !== STATE_FILE_VERSION ||
+      (persisted.state !== STATE_STANDBY && persisted.state !== STATE_AUTO) ||
+      !MODES.includes(persisted.mode)
+    ) {
+      return defaults
+    }
+
+    if (persisted.state === STATE_STANDBY) {
+      return {
+        state: STATE_STANDBY,
+        mode: persisted.mode,
+        target: null,
+        dodgeBaseTarget: null
+      }
+    }
+    if (persisted.mode === 'route') {
+      return {
+        state: STATE_AUTO,
+        mode: persisted.mode,
+        target: null,
+        dodgeBaseTarget: null
+      }
+    }
+    if (typeof persisted.target !== 'number' || !Number.isFinite(persisted.target)) {
+      return defaults
+    }
+
+    return {
+      state: STATE_AUTO,
+      mode: persisted.mode,
+      target: normalizeTargetForMode(persisted.target, persisted.mode),
+      dodgeBaseTarget:
+        typeof persisted.dodgeBaseTarget === 'number' &&
+        Number.isFinite(persisted.dodgeBaseTarget)
+          ? normalizeTargetForMode(persisted.dodgeBaseTarget, persisted.mode)
+          : null
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      app.debug?.(`${PLUGIN_ID} could not restore controller state: ${error.message}`)
+    }
+    return defaults
+  }
+}
+
+function saveControllerState(app, controllerState) {
+  const filename = controllerStatePath(app)
+  if (filename === null) {
+    return
+  }
+
+  const data = {
+    version: STATE_FILE_VERSION,
+    state: controllerState.state,
+    mode: controllerState.mode,
+    target: controllerState.target,
+    dodgeBaseTarget: controllerState.dodgeBaseTarget
+  }
+  const temporaryFilename = `${filename}.tmp`
+  try {
+    fs.mkdirSync(path.dirname(filename), { recursive: true })
+    fs.writeFileSync(temporaryFilename, JSON.stringify(data, null, 2))
+    fs.renameSync(temporaryFilename, filename)
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporaryFilename)
+    } catch (_) {
+      // The temporary file may not have been created.
+    }
+    app.debug?.(`${PLUGIN_ID} could not save controller state: ${error.message}`)
+  }
+}
+
+function controllerStatePath(app) {
+  if (typeof app.getDataDirPath !== 'function') {
+    return null
+  }
+  try {
+    const dataDir = app.getDataDirPath()
+    return typeof dataDir === 'string' && dataDir !== ''
+      ? path.join(dataDir, STATE_FILE_NAME)
+      : null
+  } catch (error) {
+    app.debug?.(`${PLUGIN_ID} could not access plugin data directory: ${error.message}`)
+    return null
+  }
+}
+
 function normalizeOptions(props) {
   const options = { ...DEFAULTS, ...props }
   if (!MODES.includes(options.defaultMode)) {
@@ -566,28 +654,6 @@ function normalizeOptions(props) {
   options.gain = positiveNumber(options.gain, DEFAULTS.gain)
   options.maxTurnRate = positiveNumber(options.maxTurnRate, DEFAULTS.maxTurnRate)
   options.deviceId = nonEmptyString(options.deviceId, DEFAULTS.deviceId)
-  options.headingPath = nonEmptyString(options.headingPath, DEFAULTS.headingPath)
-  options.coursePath = nonEmptyString(options.coursePath, DEFAULTS.coursePath)
-  options.routeTrackTruePath = nonEmptyString(
-    options.routeTrackTruePath,
-    DEFAULTS.routeTrackTruePath
-  )
-  options.routeTrackMagneticPath = nonEmptyString(
-    options.routeTrackMagneticPath,
-    DEFAULTS.routeTrackMagneticPath
-  )
-  options.routeBearingMagneticPath = nonEmptyString(
-    options.routeBearingMagneticPath,
-    DEFAULTS.routeBearingMagneticPath
-  )
-  options.routeXtePath = nonEmptyString(
-    options.routeXtePath,
-    DEFAULTS.routeXtePath
-  )
-  options.magneticVariationPath = nonEmptyString(
-    options.magneticVariationPath,
-    DEFAULTS.magneticVariationPath
-  )
   options.routeXteLookahead = numberAtLeast(
     options.routeXteLookahead,
     DEFAULTS.routeXteLookahead,
@@ -597,16 +663,9 @@ function normalizeOptions(props) {
     options.routeMaxXteCorrection,
     DEFAULTS.routeMaxXteCorrection
   )
-  options.apparentWindAnglePath = nonEmptyString(
-    options.apparentWindAnglePath,
-    DEFAULTS.apparentWindAnglePath
-  )
-  options.trueWindAnglePath = nonEmptyString(
-    options.trueWindAnglePath,
-    DEFAULTS.trueWindAnglePath
-  )
-  options.outputPath = nonEmptyString(options.outputPath, DEFAULTS.outputPath)
-  options.errorPath = nonEmptyString(options.errorPath, DEFAULTS.errorPath)
+  for (const optionName of PATH_OPTION_NAMES) {
+    options[optionName] = DEFAULTS[optionName]
+  }
   return options
 }
 

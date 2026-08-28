@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.9
+
+- Remove configurable Signal K path options and use the documented defaults.
+
+## 0.1.8
+
+- Persist the virtual autopilot state, mode, target and active dodge across Signal K restarts.
+- Resume route mode from live route data instead of a stored route heading.
+
 ## 0.1.7
 
 - Add Signal K Autopilot API v2 virtual provider.
