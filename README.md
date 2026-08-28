@@ -21,6 +21,8 @@ The turn-rate output is in `rad/s`. Positive values command a turn to starboard.
 
 Target adjustments are helm-directional. In wind modes, `+10` commands 10 degrees to starboard and `-10` commands 10 degrees to port, even though Signal K wind angles are signed values where port tack is negative.
 
+Targets are rounded to the nearest whole degree before being exposed through the API.
+
 Route mode follows the same simple logic as the legacy emulator work: route target heading is based on `bearingTrackTrue`, with a bounded correction of `-atan(crossTrackError / routeXteLookahead)`. Positive cross-track error steers left, negative cross-track error steers right. True route bearings are converted to magnetic when `navigation.magneticVariation.value` is available, so route mode steers against the same magnetic heading input as compass mode.
 
 ## Default Inputs

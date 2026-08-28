@@ -1,6 +1,6 @@
 {
   "name": "signalk-autopilot-emulator-v2",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Signal K Autopilot API v2 virtual autopilot with turn-rate output",
   "main": "index.js",
   "files": [

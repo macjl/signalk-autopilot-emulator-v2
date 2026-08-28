@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.10
+
+- Round exposed autopilot targets to the nearest whole degree.
+
 ## 0.1.9
 
 - Remove configurable Signal K path options and use the documented defaults.

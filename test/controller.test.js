@@ -65,7 +65,7 @@ test('engage initializes compass target from current heading', async () => {
   assert.equal(data.state, 'auto')
   assert.equal(data.mode, 'compass')
   assert.equal(data.engaged, true)
-  assert.equal(data.target, degToRad(123))
+  assertNear(data.target, degToRad(123))
 })
 
 test('heading controller commands starboard turn for positive heading error', () => {
@@ -246,6 +246,27 @@ test('compass target adjustment remains numerically positive to starboard', asyn
   assertNear(data.target, degToRad(45))
   assertNear(output.error, degToRad(10))
   assertNear(output.turnRate, degToRad(10) * DEFAULTS.gain)
+})
+
+test('rounds captured and adjusted targets to whole degrees', async () => {
+  const app = fakeApp({
+    'navigation.headingMagnetic.value': degToRad(150.3),
+    'environment.wind.angleApparent.value': -degToRad(35.6),
+    'navigation.course.calcValues.bearingTrackTrue.value': degToRad(89.6)
+  })
+  const controller = createController(app, DEFAULTS)
+
+  await controller.provider.engage('virtual')
+  assertNear((await controller.provider.getData('virtual')).target, degToRad(150))
+
+  await controller.provider.setTarget(degToRad(150.6), 'virtual')
+  assertNear((await controller.provider.getData('virtual')).target, degToRad(151))
+
+  await controller.provider.setMode('windApparent', 'virtual')
+  assertNear((await controller.provider.getData('virtual')).target, -degToRad(36))
+
+  await controller.provider.setMode('route', 'virtual')
+  assertNear((await controller.provider.getData('virtual')).target, degToRad(90))
 })
 
 test('courseCurrentPoint engages route mode', async () => {

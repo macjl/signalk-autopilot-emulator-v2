@@ -243,7 +243,7 @@ function createController(app, options) {
         throw commandError('Route data unavailable', 409)
       }
       selectedMode = 'route'
-      target = routeTarget
+      target = normalizeTargetForMode(routeTarget, selectedMode)
       dodgeBaseTarget = null
       engage()
     },
@@ -331,7 +331,7 @@ function createController(app, options) {
     if (selectedMode === 'route') {
       const routeTarget = readRouteTarget(app, options)
       if (routeTarget !== null) {
-        target = routeTarget
+        target = normalizeTargetForMode(routeTarget, selectedMode)
         return
       }
     }
@@ -346,11 +346,13 @@ function createController(app, options) {
     if (selectedMode === 'route') {
       const routeTarget = readRouteTarget(app, options)
       if (routeTarget !== null) {
-        return routeTarget
+        return normalizeTargetForMode(routeTarget, selectedMode)
       }
     }
     const current = readCurrentAngle(app, options, selectedMode)
-    return current === null ? defaultTargetForMode(selectedMode) : current
+    return current === null
+      ? defaultTargetForMode(selectedMode)
+      : normalizeTargetForMode(current, selectedMode)
   }
 
   function setWindTargetSide(direction) {
@@ -359,7 +361,10 @@ function createController(app, options) {
     }
     ensureTargetForMode()
     const magnitude = Math.abs(target ?? defaultTargetForMode(selectedMode))
-    target = direction === 'starboard' ? magnitude : -magnitude
+    target = normalizeTargetForMode(
+      direction === 'starboard' ? magnitude : -magnitude,
+      selectedMode
+    )
     dodgeBaseTarget = null
   }
 
@@ -396,7 +401,7 @@ function createController(app, options) {
     if (state === STATE_AUTO && selectedMode === 'route') {
       const routeTarget = readRouteTarget(app, options)
       if (routeTarget !== null) {
-        target = routeTarget
+        target = normalizeTargetForMode(routeTarget, selectedMode)
       }
     }
   }
@@ -732,7 +737,8 @@ function commandError(message, statusCode = 400) {
 }
 
 function normalizeTargetForMode(value, mode) {
-  return WIND_MODES.has(mode) ? normalizePi(value) : normalizeTau(value)
+  const normalize = WIND_MODES.has(mode) ? normalizePi : normalizeTau
+  return normalize(roundToDegrees(normalize(value)))
 }
 
 function adjustedTargetForMode(target, adjustment, mode) {
@@ -763,6 +769,10 @@ function normalizeTau(value) {
 
 function degToRad(degrees) {
   return degrees * (Math.PI / 180)
+}
+
+function roundToDegrees(radians) {
+  return degToRad(Math.round(radians / degToRad(1)))
 }
 
 function trueHeadingToMagnetic(headingTrue, magneticVariation) {
