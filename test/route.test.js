@@ -160,6 +160,136 @@ for (const trigger of ['arrivalCircleEntered', 'perpendicularPassed']) {
   })
 }
 
+for (const first of ['arrivalCircleEntered', 'perpendicularPassed']) {
+  test(`either advances on ${first} and ignores the second alarm until both clear`, async () => {
+    const app = routeApp()
+    const controller = createController(app, {
+      ...DEFAULTS,
+      autoAdvance: true,
+      autoAdvanceTrigger: 'either'
+    })
+    await controller.provider.courseCurrentPoint()
+    controller.startAutoAdvance()
+    assert.deepEqual(
+      app.subscription.subscribe.map((entry) => entry.path),
+      [
+        'notifications.navigation.course.arrivalCircleEntered',
+        'notifications.navigation.course.perpendicularPassed'
+      ]
+    )
+    const second =
+      first === 'arrivalCircleEntered'
+        ? 'perpendicularPassed'
+        : 'arrivalCircleEntered'
+    app.emitArrival(first)
+    await settle()
+    assert.equal(app.course.activeRoute.pointIndex, 1)
+
+    app.emitArrival(second)
+    await settle()
+    assert.equal(app.activations.length, 1)
+    app.emitArrival(first, null)
+    app.emitArrival(first)
+    await settle()
+    assert.equal(app.activations.length, 1)
+
+    app.emitArrival(first, { state: 'normal' })
+    app.emitArrival(second, null)
+    app.emitArrival(second)
+    await settle()
+    assert.equal(app.course.activeRoute.pointIndex, 2)
+
+    app.emitArrival(second, null)
+    app.emitArrival(first)
+    app.emitArrival(second)
+    await settle()
+    assert.equal(app.clears, 1)
+    assert.equal(controller.getInfo().state, 'standby')
+    controller.stop()
+  })
+}
+
+test('either handles two arrival notifications in one delta once', async () => {
+  const app = routeApp()
+  const controller = createController(app, {
+    ...DEFAULTS,
+    autoAdvance: true,
+    autoAdvanceTrigger: 'either'
+  })
+  await controller.provider.courseCurrentPoint()
+  controller.startAutoAdvance()
+  app.onDelta({
+    updates: [
+      {
+        values: [
+          {
+            path: 'notifications.navigation.course.arrivalCircleEntered',
+            value: { state: 'alert' }
+          },
+          {
+            path: 'notifications.navigation.course.perpendicularPassed',
+            value: { state: 'alert' }
+          }
+        ]
+      }
+    ]
+  })
+  await settle()
+  assert.equal(app.activations.length, 1)
+  controller.stop()
+})
+
+test('either waits for startup alarms to clear before accepting an arrival', async () => {
+  const app = routeApp()
+  app.paths['notifications.navigation.course.arrivalCircleEntered'] = {
+    value: { state: 'alert' }
+  }
+  const controller = createController(app, {
+    ...DEFAULTS,
+    autoAdvance: true,
+    autoAdvanceTrigger: 'either'
+  })
+  await controller.provider.courseCurrentPoint()
+  controller.startAutoAdvance()
+  app.emitArrival('perpendicularPassed')
+  await settle()
+  assert.equal(app.activations.length, 0)
+  app.emitArrival('arrivalCircleEntered', null)
+  app.emitArrival('perpendicularPassed', null)
+  app.emitArrival('arrivalCircleEntered')
+  await settle()
+  assert.equal(app.activations.length, 1)
+  controller.stop()
+})
+
+test('either does not start a second course operation while the first is pending', async () => {
+  const app = routeApp()
+  const activate = app.activateRoute.bind(app)
+  let release
+  app.activateRoute = async (destination) => {
+    await new Promise((resolve) => {
+      release = resolve
+    })
+    await activate(destination)
+  }
+  const controller = createController(app, {
+    ...DEFAULTS,
+    autoAdvance: true,
+    autoAdvanceTrigger: 'either'
+  })
+  await controller.provider.courseCurrentPoint()
+  controller.startAutoAdvance()
+  app.emitArrival('arrivalCircleEntered')
+  await settle()
+  app.emitArrival('arrivalCircleEntered', null)
+  app.emitArrival('perpendicularPassed')
+  await settle()
+  release()
+  await settle()
+  assert.equal(app.activations.length, 1)
+  controller.stop()
+})
+
 test('automatic advancement is disabled by default and the schema warns about Freeboard', () => {
   const app = routeApp()
   const controller = createController(app, DEFAULTS)
@@ -167,6 +297,11 @@ test('automatic advancement is disabled by default and the schema warns about Fr
   assert.equal(app.subscription, undefined)
   const schema = require('../index')({}).schema()
   assert.equal(schema.properties.autoAdvance.default, false)
+  assert.ok(schema.properties.autoAdvanceTrigger.enum.includes('either'))
+  assert.equal(
+    normalizeOptions({ autoAdvanceTrigger: 'either' }).autoAdvanceTrigger,
+    'either'
+  )
   assert.match(schema.properties.autoAdvance.description, /disable .*Freeboard/)
   assert.match(schema.properties.autoAdvance.description, /skip a waypoint/)
   assert.equal(normalizeOptions({ autoAdvance: 'true' }).autoAdvance, false)

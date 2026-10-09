@@ -12,7 +12,8 @@ const STATE_AUTO = 'auto'
 
 const MODES = ['compass', 'gps', 'route', 'windApparent', 'windTrue']
 const WIND_MODES = new Set(['windApparent', 'windTrue'])
-const ARRIVAL_TRIGGERS = ['arrivalCircleEntered', 'perpendicularPassed']
+const ARRIVAL_NOTIFICATIONS = ['arrivalCircleEntered', 'perpendicularPassed']
+const ARRIVAL_TRIGGERS = [...ARRIVAL_NOTIFICATIONS, 'either']
 const PATH_OPTION_NAMES = [
   'headingPath',
   'coursePath',
@@ -109,7 +110,7 @@ function pluginFactory(app) {
             type: 'string',
             title: 'Notification that advances the route',
             description:
-              'The Course Data Provider must emit the selected notification. The plugin advances immediately, without a countdown.',
+              'Select either to use both notifications: the first advances the route, then both must clear before the next arrival. The Course Data Provider must emit the selected notifications. Advancement is immediate, without a countdown.',
             enum: ARRIVAL_TRIGGERS,
             default: DEFAULTS.autoAdvanceTrigger
           },
@@ -452,14 +453,23 @@ function createController(app, options) {
     if (!options.autoAdvance) {
       return
     }
-    const notificationPath = `notifications.navigation.course.${options.autoAdvanceTrigger}`
-    const current = app.getSelfPath(notificationPath)
+    const triggers = options.autoAdvanceTrigger === 'either'
+      ? ARRIVAL_NOTIFICATIONS
+      : [options.autoAdvanceTrigger]
+    const active = new Map(
+      triggers.map((trigger) => {
+        const path = `notifications.navigation.course.${trigger}`
+        const current = app.getSelfPath(path)
+        return [path, isArrivalNotification(current?.value ?? current)]
+      })
+    )
     // An alarm already active at startup is not a new arrival event.
-    let active = isArrivalNotification(current?.value ?? current)
+    let handled = [...active.values()].some(Boolean)
+    let advancing = false
     app.subscriptionmanager.subscribe(
       {
         context: 'vessels.self',
-        subscribe: [{ path: notificationPath, policy: 'instant' }]
+        subscribe: [...active.keys()].map((path) => ({ path, policy: 'instant' }))
       },
       unsubscribes,
       (error) => app.error(`${PLUGIN_ID} arrival subscription failed: ${error}`),
@@ -469,16 +479,28 @@ function createController(app, options) {
         }
         for (const update of delta.updates ?? []) {
           for (const entry of update.values ?? []) {
-            if (entry.path !== notificationPath) {
+            if (!active.has(entry.path)) {
               continue
             }
-            const nextActive = isArrivalNotification(entry.value)
-            const entered = nextActive && !active
-            active = nextActive
-            if (entered && state === STATE_AUTO && selectedMode === 'route') {
-              provider.courseNextPoint().catch((error) => {
-                app.error(`${PLUGIN_ID} could not advance route: ${error.message}`)
-              })
+            active.set(entry.path, isArrivalNotification(entry.value))
+            if (![...active.values()].some(Boolean)) {
+              handled = false
+              continue
+            }
+            if (!handled) {
+              // Both notifications can describe the same arrival, even in
+              // separate deltas. Rearm only after all selected alarms clear.
+              handled = true
+              if (!advancing && state === STATE_AUTO && selectedMode === 'route') {
+                advancing = true
+                provider.courseNextPoint()
+                  .catch((error) => {
+                    app.error(`${PLUGIN_ID} could not advance route: ${error.message}`)
+                  })
+                  .finally(() => {
+                    advancing = false
+                  })
+              }
             }
           }
         }

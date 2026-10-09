@@ -42,15 +42,18 @@ own automatic arrival handling described below.
 
 Enable **Automatically advance route points on arrival** (`autoAdvance`, disabled
 by default) to follow the route without relying on an open Freeboard client.
-Select one trigger with `autoAdvanceTrigger`:
+Select a trigger with `autoAdvanceTrigger`:
 
 - `perpendicularPassed` (default): advance when the perpendicular through the
   current destination has been passed.
 - `arrivalCircleEntered`: advance when the vessel enters the destination's arrival
   circle. Set a positive arrival circle radius in the Course API or Freeboard.
+- `either`: listen to both notifications and advance on the first one received.
+  The second notification of the same arrival does not advance again. Both
+  notifications must clear before the plugin can handle the next arrival.
 
 The Course Data Provider must be enabled and configured to emit the selected
-notification. The actual streamed paths are
+notifications (both for `either`). The actual streamed paths are
 `notifications.navigation.course.perpendicularPassed` and
 `notifications.navigation.course.arrivalCircleEntered`.
 
