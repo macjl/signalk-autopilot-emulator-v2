@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.11
 
 - Make `courseNextPoint` advance the active route, preserving its direction, and
   end navigation in standby at the final point.
