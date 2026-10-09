@@ -12,6 +12,7 @@ const STATE_AUTO = 'auto'
 
 const MODES = ['compass', 'gps', 'route', 'windApparent', 'windTrue']
 const WIND_MODES = new Set(['windApparent', 'windTrue'])
+const ARRIVAL_TRIGGERS = ['arrivalCircleEntered', 'perpendicularPassed']
 const PATH_OPTION_NAMES = [
   'headingPath',
   'coursePath',
@@ -39,6 +40,8 @@ const DEFAULTS = {
   magneticVariationPath: 'navigation.magneticVariation.value',
   routeXteLookahead: 100,
   routeMaxXteCorrection: degToRad(60),
+  autoAdvance: false,
+  autoAdvanceTrigger: 'perpendicularPassed',
   apparentWindAnglePath: 'environment.wind.angleApparent.value',
   trueWindAnglePath: 'environment.wind.angleTrueWater.value',
   outputPath: 'steering.autopilot.output.turnRate',
@@ -95,6 +98,21 @@ function pluginFactory(app) {
             default: DEFAULTS.routeMaxXteCorrection,
             minimum: 0
           },
+          autoAdvance: {
+            type: 'boolean',
+            title: 'Automatically advance route points on arrival',
+            description:
+              'When enabled, disable "Auto-advance to next point on arrival" in Freeboard. Enabling both can skip a waypoint or end the route prematurely.',
+            default: DEFAULTS.autoAdvance
+          },
+          autoAdvanceTrigger: {
+            type: 'string',
+            title: 'Notification that advances the route',
+            description:
+              'The Course Data Provider must emit the selected notification. The plugin advances immediately, without a countdown.',
+            enum: ARRIVAL_TRIGGERS,
+            default: DEFAULTS.autoAdvanceTrigger
+          },
           gain: {
             type: 'number',
             title: 'Proportional gain',
@@ -121,6 +139,7 @@ function pluginFactory(app) {
       publishMetadata(app, options)
       controller.publishAutopilot()
       controller.publishOutput()
+      controller.startAutoAdvance()
 
       timer = setInterval(() => {
         controller.publishAutopilot()
@@ -151,6 +170,8 @@ function createController(app, options) {
   let selectedMode = restored.mode
   let target = restored.target
   let dodgeBaseTarget = restored.dodgeBaseTarget
+  const unsubscribes = []
+  let stopped = false
 
   const provider = {
     getData: async () => getInfo(),
@@ -252,8 +273,29 @@ function createController(app, options) {
       if (selectedMode !== 'route') {
         throw commandError('Cannot advance course point outside route mode', 409)
       }
-      // The route provider owns waypoint advancement. The emulator acknowledges
-      // the action so client flows can test the round-trip.
+      const course = await app.getCourse()
+      assertEngaged(state, 'advance course point')
+      if (selectedMode !== 'route' || stopped) {
+        throw commandError('Autopilot is no longer following the route', 409)
+      }
+      const route = course.activeRoute
+      if (!route) {
+        throw commandError('No active route to advance', 409)
+      }
+      if (route.pointIndex + 1 >= route.pointTotal) {
+        await app.clearDestination()
+        disengage()
+        return
+      }
+
+      await app.activateRoute({
+        href: route.href,
+        reverse: route.reverse,
+        pointIndex: route.pointIndex + 1
+      })
+      dodgeBaseTarget = null
+      publishAutopilot()
+      publishOutput()
     }
   }
 
@@ -406,12 +448,53 @@ function createController(app, options) {
     }
   }
 
+  function startAutoAdvance() {
+    if (!options.autoAdvance) {
+      return
+    }
+    const notificationPath = `notifications.navigation.course.${options.autoAdvanceTrigger}`
+    const current = app.getSelfPath(notificationPath)
+    // An alarm already active at startup is not a new arrival event.
+    let active = isArrivalNotification(current?.value ?? current)
+    app.subscriptionmanager.subscribe(
+      {
+        context: 'vessels.self',
+        subscribe: [{ path: notificationPath, policy: 'instant' }]
+      },
+      unsubscribes,
+      (error) => app.error(`${PLUGIN_ID} arrival subscription failed: ${error}`),
+      (delta) => {
+        if (stopped) {
+          return
+        }
+        for (const update of delta.updates ?? []) {
+          for (const entry of update.values ?? []) {
+            if (entry.path !== notificationPath) {
+              continue
+            }
+            const nextActive = isArrivalNotification(entry.value)
+            const entered = nextActive && !active
+            active = nextActive
+            if (entered && state === STATE_AUTO && selectedMode === 'route') {
+              provider.courseNextPoint().catch((error) => {
+                app.error(`${PLUGIN_ID} could not advance route: ${error.message}`)
+              })
+            }
+          }
+        }
+      }
+    )
+  }
+
   return {
     provider,
     getInfo,
     publishAutopilot,
     publishOutput,
+    startAutoAdvance,
     stop() {
+      stopped = true
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
       persistState()
       app.handleMessage(PLUGIN_ID, {
         updates: [
@@ -425,6 +508,14 @@ function createController(app, options) {
       })
     }
   }
+}
+
+function isArrivalNotification(value) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    ['alert', 'warn', 'alarm', 'emergency'].includes(value.state)
+  )
 }
 
 function calculateOutput(app, options, info) {
@@ -650,6 +741,10 @@ function normalizeOptions(props) {
   const options = { ...DEFAULTS, ...props }
   if (!MODES.includes(options.defaultMode)) {
     options.defaultMode = DEFAULTS.defaultMode
+  }
+  options.autoAdvance = options.autoAdvance === true
+  if (!ARRIVAL_TRIGGERS.includes(options.autoAdvanceTrigger)) {
+    options.autoAdvanceTrigger = DEFAULTS.autoAdvanceTrigger
   }
   options.updateIntervalMs = numberAtLeast(
     options.updateIntervalMs,
