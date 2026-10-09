@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11
+
+- Make `courseNextPoint` advance the active route, preserving its direction, and
+  end navigation in standby at the final point.
+- Add optional automatic advancement using arrival-circle or perpendicular-passed
+  notifications, with an explicit warning to disable Freeboard's auto-advance.
+- Add an `either` arrival trigger to use both notifications, advancing once until
+  both clear.
+
 ## 0.1.10
 
 - Round exposed autopilot targets to the nearest whole degree.

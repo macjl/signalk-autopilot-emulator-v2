@@ -25,6 +25,54 @@ Targets are rounded to the nearest whole degree before being exposed through the
 
 Route mode follows the same simple logic as the legacy emulator work: route target heading is based on `bearingTrackTrue`, with a bounded correction of `-atan(crossTrackError / routeXteLookahead)`. Positive cross-track error steers left, negative cross-track error steers right. True route bearings are converted to magnetic when `navigation.magneticVariation.value` is available, so route mode steers against the same magnetic heading input as compass mode.
 
+### Advancing route points
+
+`POST /signalk/v2/api/vessels/self/autopilots/_default/courseNextPoint`
+advances the active route by one point using the server's Course API. The pilot
+must be engaged in route mode. The route direction and arrival circle are
+preserved, and the pilot follows the next leg as its calculated values update.
+At the final point, the action clears navigation and puts the pilot in standby.
+A destination without an active route returns an HTTP 409 error.
+
+Freeboard's automatic arrival handling updates the Course API directly. The
+plugin's `courseNextPoint` action serves Autopilot API clients and the plugin's
+own automatic arrival handling described below.
+
+### Automatic arrival advancement
+
+Enable **Automatically advance route points on arrival** (`autoAdvance`, disabled
+by default) to follow the route without relying on an open Freeboard client.
+Select a trigger with `autoAdvanceTrigger`:
+
+- `perpendicularPassed` (default): advance when the perpendicular through the
+  current destination has been passed.
+- `arrivalCircleEntered`: advance when the vessel enters the destination's arrival
+  circle. Set a positive arrival circle radius in the Course API or Freeboard.
+- `either`: listen to both notifications and advance on the first one received.
+  The second notification of the same arrival does not advance again. Both
+  notifications must clear before the plugin can handle the next arrival.
+
+The Course Data Provider must be enabled and configured to emit the selected
+notifications (both for `either`). The actual streamed paths are
+`notifications.navigation.course.perpendicularPassed` and
+`notifications.navigation.course.arrivalCircleEntered`.
+
+The plugin calls `courseNextPoint` immediately on a new active notification, while
+engaged in route mode. Updates to an already active notification, its clearing,
+and notifications already active at plugin startup do not trigger advancement.
+At the final point, navigation ends and the pilot returns to standby.
+
+**If automatic advancement is enabled in this plugin, disable "Auto-advance to
+next point on arrival" in Freeboard. Enabling both can skip a waypoint or end the
+route prematurely.**
+
+The two options operate independently. Freeboard's arrival countdown uses the
+current route index when it expires: if the plugin has already advanced, Freeboard
+can advance again. Clearing the notification can cancel Freeboard's countdown,
+but only once the course provider recalculates and Freeboard receives the clear.
+Do not rely on that timing to coordinate the two options. The plugin does not
+detect or change Freeboard's settings.
+
 ## Default Inputs
 
 - `navigation.headingMagnetic.value`
